@@ -1,7 +1,8 @@
 /**
  * CarImportTaxScreen.tsx
- * Calculator screen — receives selected carTypeId from CarTypeSelectScreen.
- * Uses GDCE cascade formula verified from Vehicle Document 2022 V 646-3.
+ * Screen 2 — Tax calculator.
+ * Every KHR amount shows USD as a smaller secondary number below it.
+ * No toggle needed — both currencies always visible.
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
@@ -12,24 +13,21 @@ import {
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useTaxConfig } from './useTaxConfig';
-import { ENGINE_OPTIONS, HISTORY_KEY, MAX_HISTORY, CarTypeConfig } from './taxConfig';
+import { ENGINE_OPTIONS, HISTORY_KEY, MAX_HISTORY } from './taxConfig';
 
 // ─── Design tokens ────────────────────────────────────────────────────────────
-const CREAM  = '#F7F6F2';
-const INK    = '#1A1A18';
-const INK2   = '#5C5C58';
-const INK3   = '#9B9B96';
-const BORDER = '#E2E0D8';
-const ACCENT = '#1A4731';
-const WHITE  = '#FFFFFF';
-const DANGER = '#C0392B';
-const INFO_BG = '#EEF4FF';
-const INFO_TX = '#2A52A0';
-const EV_BG  = '#E6F7EF';
-const EV_TX  = '#0B5C34';
+const CREAM   = '#F7F6F2';
+const INK     = '#1A1A18';
+const INK2    = '#5C5C58';
+const INK3    = '#9B9B96';
+const BORDER  = '#E2E0D8';
+const ACCENT  = '#1A4731';
+const WHITE   = '#FFFFFF';
+const DANGER  = '#C0392B';
+const EV_BG   = '#E6F7EF';
+const EV_TX   = '#0B5C34';
 
-type EngineKey  = typeof ENGINE_OPTIONS[number]['key'];
-type Currency   = 'KHR' | 'USD';
+type EngineKey = typeof ENGINE_OPTIONS[number]['key'];
 
 interface TaxResult {
   cif: number; dutyRate: number; duty: number; dutyBase: number;
@@ -51,8 +49,7 @@ const calcTax = (
   vatRate: number, vvfFee: number,
 ): TaxResult => {
   const cif         = (fobUSD + freightUSD) * khrRate;
-  const dutyBase    = cif;
-  const duty        = dutyBase * customsDuty;
+  const duty        = cif * customsDuty;
   const specialBase = cif + duty;
   const special     = specialBase * specialRate;
   const vatBase     = cif + duty + special;
@@ -60,17 +57,19 @@ const calcTax = (
   const vvf         = vvfFee;
   const total       = duty + special + vat + vvf;
   return {
-    cif, dutyRate: customsDuty, duty, dutyBase,
+    cif, dutyRate: customsDuty, duty, dutyBase: cif,
     specialRate, special, specialBase,
     vatRate, vat, vatBase,
     vvf, total, totalUSD: total / khrRate, landed: cif + total,
   };
 };
 
-const fmtKHR     = (n: number) => '៛' + Math.round(n).toLocaleString('en-US');
-const fmtUSD     = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-const pct        = (r: number) => `${Math.round(r * 100)}%`;
-const formatDate = (iso: string) =>
+// ─── Formatters ───────────────────────────────────────────────────────────────
+const fmtKHR = (n: number) => '៛' + Math.round(n).toLocaleString('en-US');
+const fmtUSD = (n: number) => '$' + n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const pct    = (r: number) => `${Math.round(r * 100)}%`;
+const engineLabel = (k: string) => ENGINE_OPTIONS.find(e => e.key === k)?.label ?? k;
+const formatDate  = (iso: string) =>
   new Date(iso).toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' });
 
 // ─── SegmentControl ───────────────────────────────────────────────────────────
@@ -90,9 +89,12 @@ function SegmentControl<T extends string>({
   );
 }
 
-// ─── TaxRow ───────────────────────────────────────────────────────────────────
-const TaxRow = ({ label, code, base, rate, amount }: {
-  label: string; code: string; base: number; rate: string; amount: number;
+// ─── TaxRow — shows KHR primary + USD secondary ───────────────────────────────
+const TaxRow = ({
+  label, code, base, baseUSD, rate, amountKHR, amountUSD,
+}: {
+  label: string; code: string; base: number; baseUSD: number;
+  rate: string; amountKHR: number; amountUSD: number;
 }) => (
   <View style={s.taxRow}>
     <View style={s.taxRowTop}>
@@ -101,74 +103,79 @@ const TaxRow = ({ label, code, base, rate, amount }: {
         <View style={s.codeTag}><Text style={s.codeTagText}>{code}</Text></View>
         <View style={s.rateBadge}><Text style={s.rateBadgeText}>{rate}</Text></View>
       </View>
-      <Text style={s.taxRowAmount}>{fmtKHR(amount)}</Text>
+      {/* Amount: KHR big + USD small */}
+      <View style={s.amountCol}>
+        <Text style={s.amountKHR}>{fmtKHR(amountKHR)}</Text>
+        <Text style={s.amountUSD}>{fmtUSD(amountUSD)}</Text>
+      </View>
     </View>
-    <Text style={s.taxRowBase}>Base: {fmtKHR(base)}</Text>
+    <Text style={s.taxRowBase}>
+      Base: {fmtKHR(base)}  ·  {fmtUSD(baseUSD)}
+    </Text>
   </View>
 );
 
 // ─── History Modal ────────────────────────────────────────────────────────────
-const HistoryModal = ({ visible, history, currency, khrRate, onClose, onLoad, onClear }: {
-  visible: boolean; history: HistoryEntry[]; currency: Currency; khrRate: number;
+const HistoryModal = ({ visible, history, khrRate, onClose, onLoad, onClear }: {
+  visible: boolean; history: HistoryEntry[]; khrRate: number;
   onClose: () => void; onLoad: (e: HistoryEntry) => void; onClear: () => void;
-}) => {
-  const fmt = (n: number) => currency === 'USD' ? fmtUSD(n / khrRate) : fmtKHR(n);
-  return (
-    <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
-      <SafeAreaView style={s.modalSafe}>
-        <View style={s.modalHeader}>
-          <Text style={s.modalTitle}>Calculation history</Text>
-          <View style={s.modalHeaderRight}>
-            {history.length > 0 && (
-              <TouchableOpacity onPress={onClear} style={s.clearBtn}>
-                <Text style={s.clearBtnText}>Clear all</Text>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity onPress={onClose} style={s.closeBtn}>
-              <Text style={s.closeBtnText}>Done</Text>
+}) => (
+  <Modal visible={visible} animationType="slide" presentationStyle="pageSheet">
+    <SafeAreaView style={s.modalSafe}>
+      <View style={s.modalHeader}>
+        <Text style={s.modalTitle}>Calculation history</Text>
+        <View style={s.modalHeaderRight}>
+          {history.length > 0 && (
+            <TouchableOpacity onPress={onClear} style={s.clearBtn}>
+              <Text style={s.clearBtnText}>Clear all</Text>
             </TouchableOpacity>
-          </View>
+          )}
+          <TouchableOpacity onPress={onClose} style={s.closeBtn}>
+            <Text style={s.closeBtnText}>Done</Text>
+          </TouchableOpacity>
         </View>
-        {history.length === 0 ? (
-          <View style={s.emptyState}>
-            <Text style={s.emptyIcon}>📋</Text>
-            <Text style={s.emptyTitle}>No calculations yet</Text>
-            <Text style={s.emptyText}>Save a calculation and it will appear here.</Text>
-          </View>
-        ) : (
-          <FlatList data={history} keyExtractor={i => i.id}
-            contentContainerStyle={{ padding: 16, gap: 10 }}
-            renderItem={({ item }) => (
-              <TouchableOpacity style={s.historyItem}
-                onPress={() => { onLoad(item); onClose(); }} activeOpacity={0.75}>
-                <View style={s.historyItemTop}>
-                  <View style={s.historyTags}>
-                    <View style={s.tag}><Text style={s.tagText}>{item.carTypeName}</Text></View>
-                    {item.engine !== 'flat' && (
-                      <View style={s.tag}><Text style={s.tagText}>{item.engine}</Text></View>
-                    )}
-                  </View>
-                  <Text style={s.historyDate}>{formatDate(item.date)}</Text>
+      </View>
+      {history.length === 0 ? (
+        <View style={s.emptyState}>
+          <Text style={s.emptyIcon}>📋</Text>
+          <Text style={s.emptyTitle}>No calculations yet</Text>
+          <Text style={s.emptyText}>Save a calculation and it will appear here.</Text>
+        </View>
+      ) : (
+        <FlatList data={history} keyExtractor={i => i.id}
+          contentContainerStyle={{ padding: 16, gap: 10 }}
+          renderItem={({ item }) => (
+            <TouchableOpacity style={s.historyItem}
+              onPress={() => { onLoad(item); onClose(); }} activeOpacity={0.75}>
+              <View style={s.historyItemTop}>
+                <View style={s.historyTags}>
+                  <View style={s.tag}><Text style={s.tagText}>{item.carTypeName}</Text></View>
+                  {item.engine !== 'flat' && (
+                    <View style={s.tag}><Text style={s.tagText}>{engineLabel(item.engine)}</Text></View>
+                  )}
                 </View>
-                <View style={s.historyItemBottom}>
-                  <View>
-                    <Text style={s.historySmall}>CIF</Text>
-                    <Text style={s.historyFob}>{fmt(item.result.cif)}</Text>
-                  </View>
-                  <View style={s.historyRight}>
-                    <Text style={s.historySmall}>Total tax</Text>
-                    <Text style={s.historyTotal}>{fmt(item.result.total)}</Text>
-                  </View>
+                <Text style={s.historyDate}>{formatDate(item.date)}</Text>
+              </View>
+              <View style={s.historyItemBottom}>
+                <View>
+                  <Text style={s.historySmall}>Total tax</Text>
+                  <Text style={s.historyKHR}>{fmtKHR(item.result.total)}</Text>
+                  <Text style={s.historyUSD}>{fmtUSD(item.result.totalUSD)}</Text>
                 </View>
-                <Text style={s.historyTap}>Tap to load →</Text>
-              </TouchableOpacity>
-            )}
-          />
-        )}
-      </SafeAreaView>
-    </Modal>
-  );
-};
+                <View style={s.historyRight}>
+                  <Text style={s.historySmall}>Landed cost</Text>
+                  <Text style={s.historyKHR}>{fmtKHR(item.result.landed)}</Text>
+                  <Text style={s.historyUSD}>{fmtUSD(item.result.landed / item.khrRate)}</Text>
+                </View>
+              </View>
+              <Text style={s.historyTap}>Tap to load →</Text>
+            </TouchableOpacity>
+          )}
+        />
+      )}
+    </SafeAreaView>
+  </Modal>
+);
 
 // ─── Main Screen ─────────────────────────────────────────────────────────────
 interface Props {
@@ -184,7 +191,6 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
   const [engine,       setEngine]       = useState<EngineKey>('2000');
   const [fobInput,     setFobInput]     = useState('');
   const [freightInput, setFreightInput] = useState('0');
-  const [currency,     setCurrency]     = useState<Currency>('KHR');
   const [history,      setHistory]      = useState<HistoryEntry[]>([]);
   const [historyOpen,  setHistoryOpen]  = useState(false);
 
@@ -200,11 +206,6 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
     : (carType.specialRates['flat'] ?? 0);
 
   const result = calcTax(fob, freight, config.khrRate, carType.customsDuty, specialRate, config.vat, config.vvfFee);
-
-  const fmt    = useCallback((khrAmt: number) =>
-    currency === 'USD' ? fmtUSD(khrAmt / config.khrRate) : fmtKHR(khrAmt),
-  [currency, config.khrRate]);
-
   const taxPct = result.cif > 0 ? Math.round((result.total / result.cif) * 100) : 0;
   const isGreen = carType.id === 'ev' || carType.id === 'phev' || carType.id === 'hybrid';
 
@@ -233,21 +234,21 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
     const lines = [
       '🇰🇭 Cambodia Car Import Tax — GDCE Official Method',
       '══════════════════════════════════════════',
-      `Car type:    ${carType.icon} ${carType.name} (${carType.nameKh})`,
+      `Car type:    ${carType.icon} ${carType.name}`,
       `Engine:      ${engLabel}`,
-      `KHR rate:    ៛${config.khrRate}/USD`,
+      `Rate:        ៛${config.khrRate}/USD`,
       '',
-      `FOB cost:    ${fmtUSD(fob)}  →  ${fmtKHR(fob * config.khrRate)}`,
+      `FOB:         ${fmtUSD(fob)}  (${fmtKHR(fob * config.khrRate)})`,
       `Freight:     ${fmtUSD(freight)}`,
-      `CIF value:   ${fmtKHR(result.cif)}`,
+      `CIF:         ${fmtUSD(fob + freight)}  (${fmtKHR(result.cif)})`,
       '',
-      `COP (${pct(result.dutyRate)}) Base: ${fmtKHR(result.dutyBase)}  →  ${fmtKHR(result.duty)}`,
-      `SOP (${pct(result.specialRate)}) Base: ${fmtKHR(result.specialBase)}  →  ${fmtKHR(result.special)}`,
-      `VOP (${pct(result.vatRate)}) Base: ${fmtKHR(result.vatBase)}  →  ${fmtKHR(result.vat)}`,
-      `VVF flat  →  ${fmtKHR(result.vvf)}`,
+      `COP (${pct(result.dutyRate)}):   ${fmtUSD(result.duty / config.khrRate)}  (${fmtKHR(result.duty)})`,
+      `SOP (${pct(result.specialRate)}):   ${fmtUSD(result.special / config.khrRate)}  (${fmtKHR(result.special)})`,
+      `VOP (${pct(result.vatRate)}):   ${fmtUSD(result.vat / config.khrRate)}  (${fmtKHR(result.vat)})`,
+      `VVF:         ${fmtUSD(result.vvf / config.khrRate)}  (${fmtKHR(result.vvf)})`,
       '══════════════════════════════════════════',
-      `Total tax:   ${fmtKHR(result.total)}  (≈ ${fmtUSD(result.totalUSD)})`,
-      `Landed cost: ${fmtKHR(result.landed)}`,
+      `Total tax:   ${fmtUSD(result.totalUSD)}  (${fmtKHR(result.total)})`,
+      `Landed cost: ${fmtUSD(result.landed / config.khrRate)}  (${fmtKHR(result.landed)})`,
       '',
       `Calculated with CarTaxKH · ${config.ratesLabel}`,
     ];
@@ -291,27 +292,33 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
         {/* Car type badge */}
         <View style={[s.carTypeBadge, isGreen && s.carTypeBadgeGreen]}>
           <Text style={s.carTypeBadgeIcon}>{carType.icon}</Text>
-          <View>
+          <View style={{ flex: 1 }}>
             <Text style={[s.carTypeBadgeName, isGreen && s.carTypeBadgeNameGreen]}>
               {carType.name}
             </Text>
             <Text style={[s.carTypeBadgeDesc, isGreen && s.carTypeBadgeDescGreen]}>
-              {carType.description}
-              {carType.note ? `  ·  ${carType.note}` : ''}
+              {carType.description}{carType.note ? `  ·  ${carType.note}` : ''}
+            </Text>
+          </View>
+          {/* Rate summary in badge */}
+          <View style={s.badgeRates}>
+            <Text style={[s.badgeRateText, isGreen && s.badgeRateTextGreen]}>
+              COP {pct(carType.customsDuty)}
+            </Text>
+            <Text style={[s.badgeRateText, isGreen && s.badgeRateTextGreen]}>
+              VAT {pct(config.vat)}
             </Text>
           </View>
         </View>
 
-        {/* Currency */}
-        <View style={s.card}>
-          <Text style={s.sectionLabel}>Display currency</Text>
-          <SegmentControl
-            options={[{ key: 'KHR' as Currency, label: '🇰🇭  KHR – Riel' }, { key: 'USD' as Currency, label: '🇺🇸  USD' }]}
-            value={currency} onChange={setCurrency} />
-          <Text style={s.khrNote}>$1 = ៛{config.khrRate.toLocaleString()}</Text>
+        {/* Exchange rate info */}
+        <View style={s.rateInfoRow}>
+          <Text style={s.rateInfoText}>
+            Exchange rate: $1 = ៛{config.khrRate.toLocaleString()}
+          </Text>
         </View>
 
-        {/* Engine selector (only for engine-based types) */}
+        {/* Engine selector */}
         {carType.engineBased && (
           <View style={s.card}>
             <Text style={s.sectionLabel}>Engine displacement</Text>
@@ -342,7 +349,7 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
                 <Text style={s.inputPrefix}>$</Text>
                 <TextInput style={s.input} keyboardType="decimal-pad"
                   value={fobInput} onChangeText={setFobInput}
-                  placeholder="e.g. 9500" placeholderTextColor={INK3} selectTextOnFocus />
+                  placeholder="e.g. 15000" placeholderTextColor={INK3} selectTextOnFocus />
               </View>
             </View>
             <View style={s.inputGroup}>
@@ -355,43 +362,73 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
               </View>
             </View>
           </View>
+          {/* CIF — both currencies */}
           <View style={s.cifRow}>
-            <Text style={s.cifNote}>CIF value (tax base)</Text>
-            <Text style={s.cifValue}>{fmtKHR(result.cif)}</Text>
+            <Text style={s.cifLabel}>CIF value (tax base)</Text>
+            <View style={s.cifValues}>
+              <Text style={s.cifKHR}>{fmtKHR(result.cif)}</Text>
+              <Text style={s.cifUSD}>{fmtUSD(fob + freight)}</Text>
+            </View>
           </View>
         </View>
 
-        {/* Result */}
+        {/* Result card */}
         <View style={s.resultCard}>
           <View style={s.resultHeader}>
             <Text style={s.resultTitle}>Tax breakdown</Text>
             <View style={s.taxPctBadge}><Text style={s.taxPctText}>{taxPct}% of CIF</Text></View>
           </View>
-          <TaxRow label="Customs duty" code="COP" base={result.dutyBase}    rate={pct(result.dutyRate)}    amount={result.duty}    />
-          <TaxRow label="Special tax"  code="SOP" base={result.specialBase} rate={pct(result.specialRate)} amount={result.special} />
-          <TaxRow label="VAT"          code="VOP" base={result.vatBase}     rate={pct(result.vatRate)}     amount={result.vat}     />
+
+          <TaxRow
+            label="Customs duty" code="COP"
+            base={result.dutyBase}    baseUSD={result.dutyBase / config.khrRate}
+            rate={pct(result.dutyRate)}
+            amountKHR={result.duty}   amountUSD={result.duty / config.khrRate}
+          />
+          <TaxRow
+            label="Special tax" code="SOP"
+            base={result.specialBase} baseUSD={result.specialBase / config.khrRate}
+            rate={pct(result.specialRate)}
+            amountKHR={result.special} amountUSD={result.special / config.khrRate}
+          />
+          <TaxRow
+            label="VAT" code="VOP"
+            base={result.vatBase}     baseUSD={result.vatBase / config.khrRate}
+            rate={pct(result.vatRate)}
+            amountKHR={result.vat}    amountUSD={result.vat / config.khrRate}
+          />
+
+          {/* VVF */}
           <View style={s.vvfRow}>
             <View style={s.taxRowLeft}>
               <Text style={s.taxRowLabel}>Vignette fee</Text>
               <View style={s.codeTag}><Text style={s.codeTagText}>VVF</Text></View>
               <View style={s.rateBadge}><Text style={s.rateBadgeText}>flat</Text></View>
             </View>
-            <Text style={s.taxRowAmount}>{fmtKHR(result.vvf)}</Text>
+            <View style={s.amountCol}>
+              <Text style={s.amountKHR}>{fmtKHR(result.vvf)}</Text>
+              <Text style={s.amountUSD}>{fmtUSD(result.vvf / config.khrRate)}</Text>
+            </View>
           </View>
+
           <View style={s.divider} />
+
+          {/* Total */}
           <View style={s.totalRow}>
             <Text style={s.totalLabel}>Total import tax</Text>
             <View style={s.totalValueWrap}>
-              <Text style={s.totalValue}>{fmt(result.total)}</Text>
-              {currency === 'KHR'
-                ? <Text style={s.totalValueSub}>≈ {fmtUSD(result.totalUSD)}</Text>
-                : <Text style={s.totalValueSub}>{fmtKHR(result.total)}</Text>
-              }
+              <Text style={s.totalKHR}>{fmtKHR(result.total)}</Text>
+              <Text style={s.totalUSD}>{fmtUSD(result.totalUSD)}</Text>
             </View>
           </View>
+
+          {/* Landed cost */}
           <View style={s.landedRow}>
             <Text style={s.landedLabel}>Landed cost (CIF + taxes)</Text>
-            <Text style={s.landedValue}>{fmt(result.landed)}</Text>
+            <View style={s.landedValues}>
+              <Text style={s.landedKHR}>{fmtKHR(result.landed)}</Text>
+              <Text style={s.landedUSD}>{fmtUSD(result.landed / config.khrRate)}</Text>
+            </View>
           </View>
         </View>
 
@@ -412,7 +449,7 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
           <Text style={s.formulaLine}>COP = CIF × {pct(carType.customsDuty)}</Text>
           <Text style={s.formulaLine}>SOP = (CIF + COP) × {pct(specialRate)}</Text>
           <Text style={s.formulaLine}>VOP = (CIF + COP + SOP) × {pct(config.vat)}</Text>
-          <Text style={s.formulaLine}>VVF = ៛{config.vvfFee.toLocaleString()} flat</Text>
+          <Text style={s.formulaLine}>VVF = ៛{config.vvfFee.toLocaleString()}  ({fmtUSD(config.vvfFee / config.khrRate)}) flat</Text>
         </View>
 
         <Text style={s.disclaimer}>
@@ -420,9 +457,8 @@ const CarImportTaxScreen: React.FC<Props> = ({ carTypeId, onBack, onManageRates 
         </Text>
       </ScrollView>
 
-      <HistoryModal visible={historyOpen} history={history} currency={currency}
-        khrRate={config.khrRate} onClose={() => setHistoryOpen(false)}
-        onLoad={handleLoad} onClear={handleClear} />
+      <HistoryModal visible={historyOpen} history={history} khrRate={config.khrRate}
+        onClose={() => setHistoryOpen(false)} onLoad={handleLoad} onClear={handleClear} />
     </SafeAreaView>
   );
 };
@@ -433,7 +469,7 @@ const s = StyleSheet.create({
   scroll: { flex: 1 },
   container: { padding: 20, paddingBottom: 48 },
 
-  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 },
   backBtn: { paddingVertical: 6, paddingRight: 12 },
   backBtnText: { fontSize: 13, color: ACCENT, fontWeight: '600' },
   headerBtns: { flexDirection: 'row', gap: 8 },
@@ -442,23 +478,22 @@ const s = StyleSheet.create({
   headerBtnAccent: { backgroundColor: ACCENT, borderColor: ACCENT },
   headerBtnAccentText: { fontSize: 12, fontWeight: '600', color: WHITE },
 
-  carTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: WHITE, borderRadius: 14, padding: 14, marginBottom: 14, borderWidth: 0.5, borderColor: BORDER },
+  carTypeBadge: { flexDirection: 'row', alignItems: 'center', gap: 12, backgroundColor: WHITE, borderRadius: 14, padding: 14, marginBottom: 8, borderWidth: 0.5, borderColor: BORDER },
   carTypeBadgeGreen: { backgroundColor: EV_BG, borderColor: '#A8D5B5' },
-  carTypeBadgeIcon: { fontSize: 32 },
-  carTypeBadgeName: { fontSize: 16, fontWeight: '700', color: INK },
+  carTypeBadgeIcon: { fontSize: 30 },
+  carTypeBadgeName: { fontSize: 15, fontWeight: '700', color: INK },
   carTypeBadgeNameGreen: { color: EV_TX },
-  carTypeBadgeDesc: { fontSize: 12, color: INK3, marginTop: 2 },
+  carTypeBadgeDesc: { fontSize: 11, color: INK3, marginTop: 2 },
   carTypeBadgeDescGreen: { color: EV_TX },
+  badgeRates: { alignItems: 'flex-end', gap: 3 },
+  badgeRateText: { fontSize: 11, fontWeight: '600', color: INK3 },
+  badgeRateTextGreen: { color: EV_TX },
+
+  rateInfoRow: { alignItems: 'center', marginBottom: 12 },
+  rateInfoText: { fontSize: 12, color: INK3 },
 
   card: { backgroundColor: WHITE, borderRadius: 16, padding: 16, marginBottom: 12, borderWidth: 0.5, borderColor: BORDER },
   sectionLabel: { fontSize: 11, fontWeight: '600', color: INK3, textTransform: 'uppercase', letterSpacing: 0.9, marginBottom: 12 },
-
-  segment: { flexDirection: 'row', backgroundColor: CREAM, borderRadius: 10, padding: 3, gap: 3 },
-  segItem: { flex: 1, paddingVertical: 9, borderRadius: 8, alignItems: 'center' },
-  segAct: { backgroundColor: WHITE, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4, shadowOffset: { width: 0, height: 1 }, elevation: 2 },
-  segText: { fontSize: 13, fontWeight: '500', color: INK3 },
-  segTextAct: { color: INK },
-  khrNote: { marginTop: 8, fontSize: 12, color: INK3, textAlign: 'center' },
 
   engineGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
   engineItem: { width: '47.5%', borderRadius: 10, borderWidth: 1, borderColor: BORDER, padding: 12, backgroundColor: CREAM },
@@ -474,10 +509,14 @@ const s = StyleSheet.create({
   inputWrap: { flexDirection: 'row', alignItems: 'center', backgroundColor: CREAM, borderRadius: 10, borderWidth: 1, borderColor: BORDER, paddingHorizontal: 10, height: 44 },
   inputPrefix: { fontSize: 15, color: INK2, marginRight: 4 },
   input: { flex: 1, fontSize: 15, fontWeight: '600', color: INK, padding: 0 },
-  cifRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12 },
-  cifNote: { fontSize: 13, color: INK3 },
-  cifValue: { fontSize: 14, fontWeight: '700', color: INK },
 
+  cifRow:    { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 12, paddingTop: 10, borderTopWidth: 0.5, borderTopColor: BORDER },
+  cifLabel:  { fontSize: 13, color: INK3 },
+  cifValues: { alignItems: 'flex-end' },
+  cifKHR:    { fontSize: 14, fontWeight: '700', color: INK },
+  cifUSD:    { fontSize: 12, color: INK3, marginTop: 1 },
+
+  // Result card
   resultCard: { backgroundColor: ACCENT, borderRadius: 16, padding: 20, marginBottom: 12 },
   resultHeader: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 },
   resultTitle: { fontSize: 12, fontWeight: '600', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: 0.9 },
@@ -492,19 +531,30 @@ const s = StyleSheet.create({
   codeTagText: { fontSize: 10, color: WHITE, fontWeight: '700', letterSpacing: 0.5 },
   rateBadge: { backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 4, paddingHorizontal: 5, paddingVertical: 1 },
   rateBadgeText: { fontSize: 10, color: 'rgba(255,255,255,0.6)', fontWeight: '600' },
-  taxRowAmount: { fontSize: 14, fontWeight: '700', color: WHITE },
   taxRowBase: { fontSize: 11, color: 'rgba(255,255,255,0.4)' },
 
+  // Amount column: KHR big + USD small
+  amountCol: { alignItems: 'flex-end' },
+  amountKHR: { fontSize: 14, fontWeight: '700', color: WHITE },
+  amountUSD: { fontSize: 11, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
+
   vvfRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 10 },
+
   divider: { height: 1, backgroundColor: 'rgba(255,255,255,0.2)', marginVertical: 12 },
-  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 },
+
+  // Total
+  totalRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   totalLabel: { fontSize: 15, fontWeight: '600', color: WHITE, marginTop: 4 },
   totalValueWrap: { alignItems: 'flex-end' },
-  totalValue: { fontSize: 26, fontWeight: '700', color: WHITE, letterSpacing: -0.5 },
-  totalValueSub: { fontSize: 12, color: 'rgba(255,255,255,0.55)', marginTop: 2 },
+  totalKHR: { fontSize: 28, fontWeight: '700', color: WHITE, letterSpacing: -0.5 },
+  totalUSD: { fontSize: 15, color: 'rgba(255,255,255,0.75)', marginTop: 3, fontWeight: '500' },
+
+  // Landed
   landedRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.15)', borderRadius: 10, padding: 12 },
   landedLabel: { fontSize: 12, color: 'rgba(255,255,255,0.6)' },
-  landedValue: { fontSize: 15, fontWeight: '700', color: WHITE },
+  landedValues: { alignItems: 'flex-end' },
+  landedKHR: { fontSize: 15, fontWeight: '700', color: WHITE },
+  landedUSD: { fontSize: 12, color: 'rgba(255,255,255,0.6)', marginTop: 2 },
 
   actionRow: { flexDirection: 'row', gap: 10, marginBottom: 12 },
   btnSave: { flex: 1, backgroundColor: WHITE, borderRadius: 12, paddingVertical: 14, alignItems: 'center', borderWidth: 0.5, borderColor: BORDER },
@@ -518,6 +568,7 @@ const s = StyleSheet.create({
 
   disclaimer: { fontSize: 11, color: INK3, lineHeight: 17, textAlign: 'center' },
 
+  // Modal
   modalSafe: { flex: 1, backgroundColor: CREAM },
   modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, paddingBottom: 12, borderBottomWidth: 0.5, borderBottomColor: BORDER },
   modalTitle: { fontSize: 18, fontWeight: '700', color: INK },
@@ -538,9 +589,9 @@ const s = StyleSheet.create({
   historyDate: { fontSize: 11, color: INK3 },
   historyItemBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-end' },
   historySmall: { fontSize: 11, color: INK3, marginBottom: 2 },
-  historyFob: { fontSize: 15, fontWeight: '600', color: INK },
+  historyKHR: { fontSize: 15, fontWeight: '600', color: INK },
+  historyUSD: { fontSize: 12, color: INK3, marginTop: 1 },
   historyRight: { alignItems: 'flex-end' },
-  historyTotal: { fontSize: 18, fontWeight: '700', color: ACCENT },
   historyTap: { fontSize: 11, color: INK3, marginTop: 10, textAlign: 'right' },
 });
 
